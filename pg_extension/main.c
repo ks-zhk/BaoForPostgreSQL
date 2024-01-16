@@ -34,7 +34,7 @@ void _PG_fini(void);
 //    static PlannedStmt* bao_planner(Query* parse,
 // 3) The bao_ExecutorEnd hook gets the query timing and sends the reward
 //    for the query back to the Bao server.
-// 4) The bao_ExplainOneQuery hook adds the Bao suggested hint and the reward
+// 4) The   hook adds the Bao suggested hint and the reward
 //    prediction to the EXPLAIN output of a query.
 static PlannedStmt* bao_planner(Query *parse, const char *query_string,
                                 int cursorOptions, ParamListInfo boundParams);
@@ -142,6 +142,13 @@ void _PG_init(void) {
 
 
 void _PG_fini(void) {
+  ExecutorStart_hook = prev_ExecutorStart;
+
+  ExecutorEnd_hook = prev_ExecutorEnd;
+
+  planner_hook = prev_planner_hook;
+  
+  ExplainOneQuery_hook = prev_ExplainOneQuery;
   elog(LOG, "finished extension");
 }
 
