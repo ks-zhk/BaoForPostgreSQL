@@ -10,7 +10,7 @@
 #include "storage/bufmgr.h"
 #include "storage/buf_internals.h"
 #include "utils/lsyscache.h"
-#include "utils/relfilenodemap.h"
+#include "utils/relfilenumbermap.h"
 
 #include "bao_util.h"
 
@@ -53,15 +53,15 @@ static char* buffer_state() {
     // and relfilenode we read from the buffer header may be inconsistent.
     //buf_state = LockBufHdr(bufHdr);
 
-    tablespace = bufHdr->tag.rnode.spcNode;
-    relfilenode = bufHdr->tag.rnode.relNode;
+    tablespace = bufHdr->tag.spcOid;
+    relfilenode = (Oid)bufHdr->tag.relNumber;
 
     // Ensure both are valid.
     if (tablespace == InvalidOid || relfilenode == InvalidOid)
       continue;
 
     // Get the relation ID attached to this file node.
-    relid = RelidByRelfilenode(tablespace, relfilenode);
+    relid = RelidByRelfilenumber(tablespace, (RelFileNumber)relfilenode);
     if (relid == InvalidOid)
       continue;
 
