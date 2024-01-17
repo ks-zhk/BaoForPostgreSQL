@@ -1,6 +1,6 @@
 import random
 import time
-import psycopg2
+import psycopg
 import json
 
 import storage
@@ -60,9 +60,9 @@ class ExperimentRunner:
 
     def __get_pg_cursor(self):
         try:
-            conn = psycopg2.connect(self.__pg_connect_str)
+            conn = psycopg.connect(self.__pg_connect_str)
             return conn.cursor()
-        except psycopg2.OperationalError as e:
+        except psycopg.OperationalError as e:
             raise BaoException("Could not connect to PG database") from e
         
     def add_experimental_query(self, sql):
@@ -75,7 +75,7 @@ class ExperimentRunner:
             try:
                 cur.execute(f"EXPLAIN {sql}")
                 cur.fetchall()
-            except psycopg2.errors.ProgrammingError as e:
+            except psycopg.errors.ProgrammingError as e:
                 raise BaoException(
                     "Could not generate EXPLAIN output for experimental query, "
                     + "it will not be added.") from e
@@ -153,7 +153,7 @@ class ExperimentRunner:
                 try:
                     c.execute(sql)
                     c.fetchall()
-                except psycopg2.errors.QueryCanceled as e:
+                except psycopg.errors.QueryCanceled as e:
                     assert "timeout" in str(e)
                     if is_timeout_from_time_remaining:
                         print("Hit experimental timeout, stopping.")
@@ -166,7 +166,7 @@ class ExperimentRunner:
                     storage.record_reward(bao_plan, 2 * self.__max_query_time,
                                           pid)
                     c.execute("rollback")
-                except psycopg2.OperationalError as e:
+                except psycopg.OperationalError as e:
                     # this query caused the server to go down! give it a
                     # bit to restart, then try again.
                     print("Server down after experiment with arm", arm_idx)

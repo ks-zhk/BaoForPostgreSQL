@@ -77,7 +77,9 @@ static bool should_bao_optimize(Query* parse) {
 
   // Iterate over all the relations in this query.
   for (int i = 0; i < list_length(parse->rtable); i++) {
-    relid = rt_fetch(i, parse->rtable)->relid;
+    // elog(LOG, "[by pg_]parse->rtable 's length is: %d\n", list_length(parse->rtable));
+    // elog(LOG, "now idx = %d\n", i);
+    relid = rt_fetch(i+1, parse->rtable)->relid;
     // A relid of zero seems to have a special meaning, and it causes
     // get_rel_namespace or get_namespace_name to crash. Relid of zero
     // doesn't seem to appear in "normal" queries though.

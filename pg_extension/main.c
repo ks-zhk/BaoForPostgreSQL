@@ -179,6 +179,7 @@ static PlannedStmt* bao_planner(Query *parse,
   // `should_bao_optimize`), or if Bao is not enabled. We do not check
   // enable_bao_selection here, because if enable_bao is on, we still need
   // to attach a query plan to the query to record the reward later.
+  // elog(LOG, "[pg_bao] query = %s\n", query_string);
   if (!should_bao_optimize(parse) || !enable_bao) {
     return standard_planner(parse, query_string, cursorOptions,
                             boundParams);
