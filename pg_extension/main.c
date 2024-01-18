@@ -174,7 +174,6 @@ static PlannedStmt* bao_planner(Query *parse,
     return prev_planner_hook(parse, query_string, cursorOptions,
                              boundParams);
   }
-
   // Skip optimizing this query if it is not a SELECT statement (checked by
   // `should_bao_optimize`), or if Bao is not enabled. We do not check
   // enable_bao_selection here, because if enable_bao is on, we still need
@@ -189,7 +188,7 @@ static PlannedStmt* bao_planner(Query *parse,
   t_start = clock();
 
   // Call Bao query planning routine (in `bao_planner.h`).
-  plan = plan_query(parse, query_string, cursorOptions, boundParams);
+  plan = plan_query(parse, query_string, cursorOptions, boundParams, standard_planner);
 
   if (plan == NULL) {
     // something went wrong, default to the PG plan.
@@ -306,6 +305,7 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
   bool connected = false;
 	BufferUsage bufusage_start,
 					    bufusage;
+  elog(LOG, "func into bao_ExplainOneQuery");
   
   // If there are no other EXPLAIN hooks, add to the EXPLAIN output Bao's estimate
   // of this query plan's execution time, as well as what hints would be used
@@ -315,21 +315,19 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
   //       figure out how to add to the end of it. 
   
   if (prev_ExplainOneQuery) {
+    elog(LOG, "previous ExplainOneQuery_hook is not NULL, firstly do the previous function");
     prev_ExplainOneQuery(query, cursorOptions, into, es,
                          queryString, params, queryEnv);
   }
-
   // There should really be a standard_ExplainOneQuery, but there
   // isn't, so we will do our best. We will replicate some PG code
   // here as a consequence.
 
   if (es->buffers)
     bufusage_start = pgBufferUsage;
-    
   INSTR_TIME_SET_CURRENT(plan_start);
 
-  plan = (planner_hook ? planner_hook(query, queryString, cursorOptions, params)
-          : standard_planner(query, queryString, cursorOptions, params));
+  plan = pg_plan_query(query, queryString, cursorOptions, params);
   INSTR_TIME_SET_CURRENT(plan_duration);
   INSTR_TIME_SUBTRACT(plan_duration, plan_start);
 
@@ -342,15 +340,15 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
 
   if (!enable_bao) {
     // Bao is disabled, do the deault explain thing.
-
+    elog(LOG, "Bao is disabled, do the default explain thing.");
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
 					   &plan_duration, (es->buffers ? &bufusage : NULL));
     return;
   }
-
+  elog(LOG, "bao is enabled, do the bao things");
   buffer_json = buffer_state();
-  plan_json = plan_to_json(plan);
 
+  plan_json = plan_to_json(plan);
   // Ask the Bao server for an estimate for this plan.
   conn_fd = connect_to_bao(bao_host, bao_port);
   if (conn_fd < 0) {
@@ -372,11 +370,12 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
     connected = true;
     shutdown(conn_fd, SHUT_RDWR);
   }
+  elog(LOG, "successfully asked the Bao server for an estimate for this plan");
 
   // Open a new explain group called "Bao" and add our prediction into it.
   ExplainOpenGroup("BaoProps", NULL, true, es);
   ExplainOpenGroup("Bao", "Bao", true, es);
-
+  elog(LOG, "successfully Open two new explain groups about Bao");
   if (connected) {
     // The Bao server will (correctly) give a NaN if no model is available,
     // but PostgreSQL will dump that NaN into the raw JSON, causing parse bugs.
@@ -384,13 +383,13 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
       ExplainPropertyText("Bao prediction", "NaN", es);
     else
       ExplainPropertyFloat("Bao prediction", "ms", prediction, 3, es);
+    elog(LOG, "successfully pinrt the bao explain text");
   }
   
   if (bao_include_json_in_explain) {
     ExplainPropertyText("Bao plan JSON", plan_json, es);
     ExplainPropertyText("Bao buffer JSON", buffer_json, es);
   }
-
   free(plan_json);
   free(buffer_json);
 
@@ -399,7 +398,7 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
   // since EXPLAIN should still be fast.
   old_selection_val = enable_bao_selection;
   enable_bao_selection = true;
-  bao_plan = plan_query(query, queryString, cursorOptions, params);
+  bao_plan = plan_query(query, queryString, cursorOptions, params, pg_plan_query);
   enable_bao_selection = old_selection_val;
   
   if (!bao_plan) {
@@ -417,6 +416,7 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
   ExplainCloseGroup("BaoProps", NULL, true, es);
   
   // Do the deault explain thing.
+  elog(LOG, "finished to do bao things, do the default ExplainOnePlan function");
   ExplainOnePlan(plan, into, es, queryString,
                  params, queryEnv, &plan_duration, (es->buffers ? &bufusage : NULL));
 }

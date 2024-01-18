@@ -5,7 +5,7 @@
 #include "bao_configs.h"
 #include "bao_util.h"
 #include "bao_bufferstate.h"
-
+#include "nodes/nodes.h"
 
 // Functions to help with Bao query planning.
 
@@ -32,7 +32,7 @@
 
 // Connect to a Bao server, construct plans for each arm, have the server
 // select a plan. Has the same signature as the PG optimizer.
-BaoPlan *plan_query(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams);
+BaoPlan *plan_query(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams, planner_hook_type std_planner);
 
 // Translate an arm index into SQL statements to give the hint (used for EXPLAIN).
 char* arm_to_hint(int arm);
@@ -210,37 +210,46 @@ static void set_arm_options(int arm) {
 
 // Get a query plan for a particular arm.
 static PlannedStmt* plan_arm(int arm, Query* parse, const char *query_string,
-                             int cursorOptions, ParamListInfo boundParams) {
+                             int cursorOptions, ParamListInfo boundParams, planner_hook_type std_planner) {
 
   PlannedStmt* plan = NULL;
   Query* query_copy = copyObject(parse); // create a copy of the query plan
-
+  elog(LOG, "in plan_arm 217");
   if (arm == -1) {
     // Use whatever the user has set as the current configuration.
-    plan = standard_planner(query_copy, query_string, cursorOptions, boundParams);
+    plan = std_planner(query_copy, query_string, cursorOptions, boundParams);
+    elog(LOG, "in plan_arm 221");
     return plan;
   }
   
   // Preserving the user's options, set the config to match the arm index
   // and invoke the PG planner.
+  elog(LOG, "in plan_arm 227");
   save_arm_options({
       set_arm_options(arm);
-      plan = standard_planner(query_copy, query_string, cursorOptions, boundParams);
+      elog(LOG, "in plan_arm 230");
+      if (std_planner == NULL) {
+        elog(WARNING, "in plan_arm, the std_planner is NULL!");
+      } else {
+        elog(LOG, "the planner's address is %llx", (unsigned long long)std_planner);
+      }
+      plan = std_planner(query_copy, query_string, cursorOptions, boundParams);
+      elog(LOG, "in plan_arm 232");
     });
-
+  elog(LOG, "in plan_arm 234");
   return plan;
 }
 
 // A struct to represent a query plan before we transform it into JSON.
 typedef struct BaoPlanNode {
   // An integer representation of the PG NodeTag.
-  unsigned int node_type;
+  NodeTag node_type;
 
   // The optimizer cost for this node (total cost).
-  double optimizer_cost;
+  Cost optimizer_cost;
 
   // The cardinality estimate (plan rows) for this node.
-  double cardinality_estimate;
+  Cardinality cardinality_estimate;
 
   // If this is a scan or index lookup, the name of the underlying relation.
   char* relation_name;
@@ -346,14 +355,14 @@ static char* plan_to_json(PlannedStmt* plan) {
   fclose(stream);
 
   free_bao_plan_node(transformed_plan);
-  
+  // elog(LOG,"the plan_json: %s, length is : %lu", buf, strlen(buf));
   return buf;
 }
 
 // Primary planning function. Invokes the PG planner for each arm, sends the
 // results to the Bao server, gets the response, and returns the corrosponding
 // query plan (as a BaoPlan).
-BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams) {
+BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams, planner_hook_type std_planner) {
   BaoPlan* plan;
   PlannedStmt* plan_for_arm[BAO_MAX_ARMS];
   char* json_for_arm[BAO_MAX_ARMS];
@@ -367,13 +376,12 @@ BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, P
   
   // Connect this buffer state with the query.
   plan->query_info->buffer_json = buffer_state();
-
   if (!enable_bao_selection) {
     // If Bao is not picking query plans, we use arm -1 to get the
     // default PostgreSQL plan. Note that we do *not* use arm 0, as
     // this would ignore the user's settings for things like
     // enable_nestloop.
-    plan->plan = plan_arm(-1, parse, query_string, cursorOptions, boundParams);
+    plan->plan = plan_arm(-1, parse, query_string, cursorOptions, boundParams, std_planner);
     plan->query_info->plan_json = plan_to_json(plan->plan);
     return plan;
   }
@@ -385,22 +393,20 @@ BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, P
   }
 
   memset(plan_for_arm, 0, BAO_MAX_ARMS*sizeof(PlannedStmt*));
-
   write_all_to_socket(conn_fd, START_QUERY_MESSAGE);
   for (int i = 0; i < bao_num_arms; i++) {
     // Plan the query for this arm.
     query_copy = copyObject(parse);
-    plan_for_arm[i] = plan_arm(i, query_copy, query_string, cursorOptions, boundParams);
-
+    plan_for_arm[i] = plan_arm(i, query_copy, query_string, cursorOptions, boundParams, std_planner);
     // Transform it into JSON, transmit it to the Bao server.
     json_for_arm[i] = plan_to_json(plan_for_arm[i]);
     write_all_to_socket(conn_fd, json_for_arm[i]);
   }
-  
+  elog(LOG, "successfully get all arms' plans");
   write_all_to_socket(conn_fd, plan->query_info->buffer_json);
   write_all_to_socket(conn_fd, TERMINAL_MESSAGE);
-  shutdown(conn_fd, SHUT_WR);
-
+  // shutdown(conn_fd, SHUT_WR);
+  elog(LOG, "successfully shutdown the WR_fd connected to the bao_server in plan_query");
   // Read the response.
   if (read(conn_fd, &plan->selection, sizeof(unsigned int)) != sizeof(unsigned int)) {
     shutdown(conn_fd, SHUT_RDWR);
@@ -408,6 +414,7 @@ BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, P
     plan->selection = 0;
   }
   shutdown(conn_fd, SHUT_RDWR);
+  elog(LOG, "successfully shutdown the RD_fd connected to the bao_server in plan_query");
 
   if (plan->selection >= BAO_MAX_ARMS) {
     elog(ERROR, "Bao server returned arm index %d, which is outside the range.",

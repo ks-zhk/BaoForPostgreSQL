@@ -36,11 +36,12 @@ static char* buffer_state() {
   size_t json_size;
   FILE* stream;
  
-
+  
   struct buffer_counter* map = NULL;
   struct buffer_counter* query = NULL;
   struct buffer_counter* tmp = NULL;
-
+  
+  elog(LOG, "in buffer_state");
   // For each buffer, we either add or increment a hash table entry.
   for (i = 0; i < NBuffers; i++) {
     BufferDesc *bufHdr;
