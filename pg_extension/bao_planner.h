@@ -6,6 +6,10 @@
 #include "bao_util.h"
 #include "bao_bufferstate.h"
 #include "nodes/nodes.h"
+#include "nodes/print.h"
+#include "utils/probes.h"
+#include "utils/guc.h"
+#include "tcop/tcopprot.h"
 
 // Functions to help with Bao query planning.
 
@@ -33,7 +37,7 @@
 // Connect to a Bao server, construct plans for each arm, have the server
 // select a plan. Has the same signature as the PG optimizer.
 BaoPlan *plan_query(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams, planner_hook_type std_planner);
-
+PlannedStmt *bao_pg_plan_query(Query *querytree, const char *query_string, int cursorOptions, ParamListInfo boundParams);
 // Translate an arm index into SQL statements to give the hint (used for EXPLAIN).
 char* arm_to_hint(int arm);
 
@@ -400,12 +404,13 @@ BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, P
     plan_for_arm[i] = plan_arm(i, query_copy, query_string, cursorOptions, boundParams, std_planner);
     // Transform it into JSON, transmit it to the Bao server.
     json_for_arm[i] = plan_to_json(plan_for_arm[i]);
+    elog(LOG, "arm_id: %d with arm_json: %s",i, json_for_arm[i]);
     write_all_to_socket(conn_fd, json_for_arm[i]);
   }
   elog(LOG, "successfully get all arms' plans");
   write_all_to_socket(conn_fd, plan->query_info->buffer_json);
   write_all_to_socket(conn_fd, TERMINAL_MESSAGE);
-  // shutdown(conn_fd, SHUT_WR);
+  shutdown(conn_fd, SHUT_WR);
   elog(LOG, "successfully shutdown the WR_fd connected to the bao_server in plan_query");
   // Read the response.
   if (read(conn_fd, &plan->selection, sizeof(unsigned int)) != sizeof(unsigned int)) {
@@ -434,6 +439,84 @@ BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, P
   }
     
   return plan;
+}
+
+PlannedStmt *
+bao_pg_plan_query(Query *querytree, const char *query_string, int cursorOptions,
+			  ParamListInfo boundParams)
+{
+	PlannedStmt *plan;
+
+	/* Utility commands have no plans. */
+	if (querytree->commandType == CMD_UTILITY)
+		return NULL;
+
+	/* Planner must have a snapshot in case it calls user-defined functions. */
+	Assert(ActiveSnapshotSet());
+
+	TRACE_POSTGRESQL_QUERY_PLAN_START();
+
+	if (log_planner_stats)
+		ResetUsage();
+
+	/* call the optimizer */
+	plan = standard_planner(querytree, query_string, cursorOptions, boundParams);
+
+	if (log_planner_stats)
+		ShowUsage("PLANNER STATISTICS");
+
+#ifdef COPY_PARSE_PLAN_TREES
+	/* Optional debugging check: pass plan tree through copyObject() */
+	{
+		PlannedStmt *new_plan = copyObject(plan);
+
+		/*
+		 * equal() currently does not have routines to compare Plan nodes, so
+		 * don't try to test equality here.  Perhaps fix someday?
+		 */
+#ifdef NOT_USED
+		/* This checks both copyObject() and the equal() routines... */
+		if (!equal(new_plan, plan))
+			elog(WARNING, "copyObject() failed to produce an equal plan tree");
+		else
+#endif
+			plan = new_plan;
+	}
+#endif
+
+#ifdef WRITE_READ_PARSE_PLAN_TREES
+	/* Optional debugging check: pass plan tree through outfuncs/readfuncs */
+	{
+		char	   *str;
+		PlannedStmt *new_plan;
+
+		str = nodeToString(plan);
+		new_plan = stringToNodeWithLocations(str);
+		pfree(str);
+
+		/*
+		 * equal() currently does not have routines to compare Plan nodes, so
+		 * don't try to test equality here.  Perhaps fix someday?
+		 */
+#ifdef NOT_USED
+		/* This checks both outfuncs/readfuncs and the equal() routines... */
+		if (!equal(new_plan, plan))
+			elog(WARNING, "outfuncs/readfuncs failed to produce an equal plan tree");
+		else
+#endif
+			plan = new_plan;
+	}
+#endif
+
+	/*
+	 * Print plan if debugging.
+	 */
+	if (Debug_print_plan)
+		elog_node_display(LOG, "plan", plan, Debug_pretty_print);
+
+	TRACE_POSTGRESQL_QUERY_PLAN_DONE();
+
+	return plan;
 }
 
 // Given an arm index, produce the SQL statements that would cause PostgreSQL to

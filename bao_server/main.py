@@ -121,10 +121,11 @@ class BaoJSONHandler(JSONTCPHandler):
                 self.server.bao_model.load_model(path)
             else:
                 print("Unknown message type:", message_type)
-            
+            print("get message : ", data)
             return True
 
         self.__messages.append(data)
+        print("get message : ", data)
         return False
                 
 
