@@ -218,29 +218,18 @@ static PlannedStmt* plan_arm(int arm, Query* parse, const char *query_string,
 
   PlannedStmt* plan = NULL;
   Query* query_copy = copyObject(parse); // create a copy of the query plan
-  elog(LOG, "in plan_arm 217");
   if (arm == -1) {
     // Use whatever the user has set as the current configuration.
     plan = std_planner(query_copy, query_string, cursorOptions, boundParams);
-    elog(LOG, "in plan_arm 221");
     return plan;
   }
   
   // Preserving the user's options, set the config to match the arm index
   // and invoke the PG planner.
-  elog(LOG, "in plan_arm 227");
   save_arm_options({
       set_arm_options(arm);
-      elog(LOG, "in plan_arm 230");
-      if (std_planner == NULL) {
-        elog(WARNING, "in plan_arm, the std_planner is NULL!");
-      } else {
-        elog(LOG, "the planner's address is %llx", (unsigned long long)std_planner);
-      }
       plan = std_planner(query_copy, query_string, cursorOptions, boundParams);
-      elog(LOG, "in plan_arm 232");
     });
-  elog(LOG, "in plan_arm 234");
   return plan;
 }
 
@@ -404,14 +393,11 @@ BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, P
     plan_for_arm[i] = plan_arm(i, query_copy, query_string, cursorOptions, boundParams, std_planner);
     // Transform it into JSON, transmit it to the Bao server.
     json_for_arm[i] = plan_to_json(plan_for_arm[i]);
-    elog(LOG, "arm_id: %d with arm_json: %s",i, json_for_arm[i]);
     write_all_to_socket(conn_fd, json_for_arm[i]);
   }
-  elog(LOG, "successfully get all arms' plans");
   write_all_to_socket(conn_fd, plan->query_info->buffer_json);
   write_all_to_socket(conn_fd, TERMINAL_MESSAGE);
   shutdown(conn_fd, SHUT_WR);
-  elog(LOG, "successfully shutdown the WR_fd connected to the bao_server in plan_query");
   // Read the response.
   if (read(conn_fd, &plan->selection, sizeof(unsigned int)) != sizeof(unsigned int)) {
     shutdown(conn_fd, SHUT_RDWR);
@@ -419,7 +405,6 @@ BaoPlan* plan_query(Query *parse, const char *query_string, int cursorOptions, P
     plan->selection = 0;
   }
   shutdown(conn_fd, SHUT_RDWR);
-  elog(LOG, "successfully shutdown the RD_fd connected to the bao_server in plan_query");
 
   if (plan->selection >= BAO_MAX_ARMS) {
     elog(ERROR, "Bao server returned arm index %d, which is outside the range.",
