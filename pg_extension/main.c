@@ -43,9 +43,6 @@ static void bao_ExecutorEnd(QueryDesc *queryDesc);
 static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* into,
                                 ExplainState* es, const char* queryString,
                                 ParamListInfo params, QueryEnvironment *queryEnv);
-static void test_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* into,
-                                ExplainState* es, const char* queryString,
-                                ParamListInfo params, QueryEnvironment *queryEnv);
 
 static planner_hook_type prev_planner_hook = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
@@ -145,6 +142,7 @@ void _PG_init(void) {
 
 
 void _PG_fini(void) {
+
   ExecutorStart_hook = prev_ExecutorStart;
 
   ExecutorEnd_hook = prev_ExecutorEnd;
@@ -291,56 +289,6 @@ static void bao_ExecutorEnd(QueryDesc *queryDesc) {
     standard_ExecutorEnd(queryDesc);
   }
 }
-static void test_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* into,
-                                ExplainState* es, const char* queryString,
-                                ParamListInfo params, QueryEnvironment* queryEnv) {
-  PlannedStmt* plan;
-  PlannedStmt* std_plan;
-  instr_time plan_start, plan_duration;
-	BufferUsage bufusage_start,
-					    bufusage;
-  
-  // If there are no other EXPLAIN hooks, add to the EXPLAIN output Bao's estimate
-  // of this query plan's execution time, as well as what hints would be used
-  // by Bao.
-  
-  // TODO: right now we add to the start of the EXPLAIN output, because I cannot
-  //       figure out how to add to the end of it. 
-  
-  if (prev_ExplainOneQuery) {
-    elog(LOG, "previous ExplainOneQuery_hook is not NULL, firstly do the previous function");
-    prev_ExplainOneQuery(query, cursorOptions, into, es,
-                         queryString, params, queryEnv);
-  }
-  // There should really be a standard_ExplainOneQuery, but there
-  // isn't, so we will do our best. We will replicate some PG code
-  // here as a consequence.
-
-  if (es->buffers)
-    bufusage_start = pgBufferUsage;
-  INSTR_TIME_SET_CURRENT(plan_start);
-
-  plan = pg_plan_query(query, queryString, cursorOptions, params);
-  INSTR_TIME_SET_CURRENT(plan_duration);
-  INSTR_TIME_SUBTRACT(plan_duration, plan_start);
-
-  /* calc differences of buffer counters. */
-  if (es->buffers)
-  {
-    memset(&bufusage, 0, sizeof(BufferUsage));
-    BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
-  }
-
-  if (!enable_bao) {
-    // Bao is disabled, do the deault explain thing.
-		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &plan_duration, (es->buffers ? &bufusage : NULL));
-    return;
-  }
-  std_plan = standard_planner(query, queryString, cursorOptions, params);
-  ExplainOnePlan(plan, into, es, queryString,
-                params, queryEnv, &plan_duration, (es->buffers ? &bufusage : NULL));
-}
 
 static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* into,
                                 ExplainState* es, const char* queryString,
@@ -446,11 +394,7 @@ static void bao_ExplainOneQuery(Query* query, int cursorOptions, IntoClause* int
   // since EXPLAIN should still be fast.
   old_selection_val = enable_bao_selection;
   enable_bao_selection = true;
-  if (planner_hook == bao_planner) {
-    bao_plan = plan_query(query, queryString, cursorOptions, params, bao_pg_plan_query);
-  } else {
-    bao_plan = plan_query(query, queryString, cursorOptions, params, pg_plan_query);
-  }
+  bao_plan = plan_query(query, queryString, cursorOptions, params, standard_planner);
   // bao_plan = plan_query(query, queryString, cursorOptions, params, pg_plan_query);
   enable_bao_selection = old_selection_val;
   
